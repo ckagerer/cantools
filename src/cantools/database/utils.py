@@ -105,6 +105,31 @@ def _encode_signal_values(signals: Sequence[Union["Signal", "Data"]],
     return raw_values
 
 
+def _pack_formats(formats: Formats, raw_signal_values: dict[str, int | float]) -> int:
+    """Pack raw signal values into a big-endian integer payload.
+
+    The primary big- and little-endian codecs cover the first
+    internally non-overlapping layer. ``formats.extra_layers`` holds
+    additional (big, little) codecs for overlapping signals that
+    cannot share a bitstruct format string with that first layer, for
+    example bit flags plus a status field on the same bits. Those
+    layers are packed separately and OR-ed together.
+    """
+    packed_union = (
+        int.from_bytes(formats.big_endian.pack(raw_signal_values), "big")
+        | int.from_bytes(formats.little_endian.pack(raw_signal_values), "little")
+    )
+
+    # Overlapping signals: extra codecs OR-ed into the same payload.
+    for big_endian, little_endian in formats.extra_layers:
+        packed_union |= (
+            int.from_bytes(big_endian.pack(raw_signal_values), "big")
+            | int.from_bytes(little_endian.pack(raw_signal_values), "little")
+        )
+
+    return packed_union
+
+
 def covered_signals(signal_values: SignalMappingType,
                     formats: Formats) -> set[str]:
     """Return the overlapping signals missing in ``signal_values`` whose
@@ -144,7 +169,7 @@ def _encode_overlapping(signal_values: SignalMappingType,
 
     signal_masks = formats.signal_masks
     assert signal_masks is not None
-    codec_masks = list(formats.codec_masks)
+    codec_masks = formats.codec_masks
 
     if signal_masks.keys() <= signal_values.keys():
         raw_signal_values = _encode_signal_values(signals, signal_values, scaling)
@@ -156,21 +181,22 @@ def _encode_overlapping(signal_values: SignalMappingType,
             scaling)
 
         # Left out signals pack as zero bits, the OR fills them in.
+        masks = list(codec_masks)
         for name in omitted:
             index, mask = signal_masks[name]
             raw_signal_values[name] = 0
-            codec_masks[index] &= ~mask
+            masks[index] &= ~mask
+        codec_masks = tuple(masks)
 
     packed = []
+    packed_union = 0
     for big_endian, little_endian in ((formats.big_endian,
                                        formats.little_endian),
                                       *formats.extra_layers):
-        packed.append(int.from_bytes(big_endian.pack(raw_signal_values), "big"))
-        packed.append(int.from_bytes(little_endian.pack(raw_signal_values), "little"))
-
-    packed_union = 0
-    for value in packed:
-        packed_union |= value
+        big_value = int.from_bytes(big_endian.pack(raw_signal_values), "big")
+        little_value = int.from_bytes(little_endian.pack(raw_signal_values), "little")
+        packed += [big_value, little_value]
+        packed_union |= big_value | little_value
 
     for index, (value, mask) in enumerate(zip(packed, codec_masks, strict=True)):
         # Bits that another codec sets but this codec does not.
@@ -199,11 +225,7 @@ def encode_data(signal_values: SignalMappingType,
         return _encode_overlapping(signal_values, signals, formats, scaling)
 
     raw_signal_values = _encode_signal_values(signals, signal_values, scaling)
-    big_packed = formats.big_endian.pack(raw_signal_values)
-    little_packed = formats.little_endian.pack(raw_signal_values)
-    packed_union = int.from_bytes(big_packed, "big") | int.from_bytes(little_packed, "little")
-
-    return packed_union
+    return _pack_formats(formats, raw_signal_values)
 
 
 def decode_data(data: bytes,
@@ -437,9 +459,10 @@ def create_encode_decode_formats(signals: Sequence[Union["Data", "Signal"]], num
 
     # Signals overlap if a byte order needs more than one layer, or if
     # big and little endian signals use fewer bits than their total
-    # length. Encoding then needs the bits of each signal.
+    # length. Encoding then needs the bits of each signal. This assumes
+    # that all signals fit in the message.
     full_mask = (1 << format_length) - 1
-    signal_masks = None
+    signal_masks: dict[str, tuple[int, int]] | None = None
     codec_masks: list[int] = []
 
     if layer_count > 1 or (
@@ -461,6 +484,12 @@ def create_encode_decode_formats(signals: Sequence[Union["Data", "Signal"]], num
                 mask = full_mask & ~create_little([signal])[1]
                 signal_masks[signal.name] = (2 * index + 1, mask)
                 codec_masks[2 * index + 1] |= mask
+
+        # Signals with the same name cannot be told apart, so keep the
+        # OR-ed encode of _pack_formats() for them.
+        if len(signal_masks) < len(signals):
+            signal_masks = None
+            codec_masks = []
 
     return Formats(
         compiled_layers[0].big_endian,

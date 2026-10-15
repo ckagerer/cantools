@@ -4161,13 +4161,32 @@ BO_ 1 M: 2 Vector__XXX
             'The values of the overlapping signals "Msb" and "Raw" '
             'do not match.')
 
+    def test_overlapping_signals_encode_mixed_byte_order(self):
+        # A big endian word and a little endian flag on the same bit
+        # share one layer, so only the bit count shows the overlap.
+        message = Message(1, 'M', 2,
+                          [Signal('Word', 7, 16, 'big_endian'),
+                           Signal('Flag', 0, 1)],
+                          strict=False)
+
+        self.assertEqual(message.encode({'Word': 0x0100}), b'\x01\x00')
+        self.assertEqual(message.encode({'Word': 0x0100, 'Flag': 1}),
+                         b'\x01\x00')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Word': 0, 'Flag': 1})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Word" and "Flag" '
+            'do not match.')
+
     def test_overlapping_multiplexed_signals_encode(self):
-        # Overlaps are handled per multiplexer branch.
+        # Overlaps are handled per multiplexer branch. The multiplexer
+        # is required even if another signal sets all its bits.
         signals = [
             Signal('Mux', 0, 8, is_multiplexer=True),
-            Signal('Other', 8, 8,
-                   multiplexer_ids=[0],
-                   multiplexer_signal='Mux'),
+            Signal('MuxView', 0, 8),
             Signal('Whole', 8, 8,
                    multiplexer_ids=[1],
                    multiplexer_signal='Mux'),
@@ -4181,8 +4200,6 @@ BO_ 1 M: 2 Vector__XXX
         message = Message(1, 'M', 2, signals, strict=False)
         bits = {f'Bit{i}': (0xa5 >> i) & 1 for i in range(8)}
 
-        self.assertEqual(message.encode({'Mux': 0, 'Other': 0x55}),
-                         b'\x00\x55')
         self.assertEqual(message.encode({'Mux': 1, 'Whole': 0xa5}),
                          b'\x01\xa5')
         self.assertEqual(message.encode({'Mux': 1, **bits}), b'\x01\xa5')
@@ -4193,6 +4210,20 @@ BO_ 1 M: 2 Vector__XXX
         self.assertEqual(
             str(cm.exception),
             'The values of the overlapping signals "Bit0" and "Whole" '
+            'do not match.')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'MuxView': 1, 'Whole': 0xa5})
+
+        self.assertEqual(str(cm.exception),
+                         'The signal "Mux" is required for encoding.')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Mux': 1, 'MuxView': 2, 'Whole': 0xa5})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Mux" and "MuxView" '
             'do not match.')
 
     def test_database_signals_check_failure(self):

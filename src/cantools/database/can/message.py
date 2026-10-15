@@ -531,7 +531,9 @@ class Message:
         return a dictionary containing exactly the ones required.
 
         If a required signal is missing from the input dictionary, a
-        ``EncodeError`` exception is raised.
+        ``EncodeError`` exception is raised. An overlapping signal is not
+        required if given signals of the same multiplexer branch (or of
+        the root) set all its bits.
         '''
 
         if node is None:
@@ -539,14 +541,16 @@ class Message:
         assert node is not None
 
         result: dict[str, SignalValueType] = {}
+        covered: set[str] | None = None
 
         for signal in node['signals']:
             val = input_data.get(signal.name)
             if val is None:
+                if covered is None:
+                    covered = covered_signals(input_data, node['formats'])
+
                 # Multiplexers are needed to select the branch.
-                if (not signal.is_multiplexer
-                        and signal.name in covered_signals(input_data,
-                                                           node['formats'])):
+                if not signal.is_multiplexer and signal.name in covered:
                     continue
 
                 raise EncodeError(f'The signal "{signal.name}" is '
@@ -918,10 +922,13 @@ class Message:
         ones expected, and their values must be within their allowed ranges,
         or an `EncodeError` exception is raised.
 
-        Overlapping signals (only possible if the database was loaded
-        with ``strict=False``) must have the same raw bits where they
-        overlap, or an `EncodeError` exception is raised. An overlapping
-        signal may be left out if the given signals set all its bits.
+        Overlapping signals in the same multiplexer branch (or in the
+        root) must have the same raw bits where they overlap, or an
+        `EncodeError` exception is raised. Such signals exist only if the
+        database was loaded with ``strict=False``. An overlapping signal
+        may be left out if the given signals set all its bits. To encode
+        decoded data after a change of one signal, remove the signals
+        that overlap it first.
 
         >>> foo = db.get_message_by_name('Foo')
         >>> foo.encode({'Bar': 1, 'Fum': 5.0})
