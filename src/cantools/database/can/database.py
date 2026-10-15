@@ -35,7 +35,10 @@ class Database:
     instances of this class.
 
     If `strict` is ``True`` an exception is raised if any signals are
-    overlapping or if they don't fit in their message.
+    overlapping or if they don't fit in their message. With ``False``,
+    overlapping signals are allowed. Decoding returns all of them, and
+    :meth:`Message.encode()<cantools.database.can.Message.encode>`
+    describes how they are encoded.
 
     By default signals are sorted by their start bit when their Message object is created.
     If you don't want them to be sorted pass `sort_signals = None`.
@@ -555,6 +558,9 @@ class Database:
 
         If `strict` is ``True`` all signal values must be within their
         allowed ranges, or an exception is raised.
+
+        For overlapping signals, see
+        :meth:`Message.encode()<cantools.database.can.Message.encode>`.
 
         >>> db.encode_message(158, {'Bar': 1, 'Fum': 5.0})
         b'\\x01\\x45\\x23\\x00\\x11'

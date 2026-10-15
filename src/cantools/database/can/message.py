@@ -54,7 +54,9 @@ class Message:
     information.
 
     If `strict` is ``True`` an exception is raised if any signals are
-    overlapping or if they don't fit in the message.
+    overlapping or if they don't fit in the message. With ``False``,
+    overlapping signals are allowed. Decoding returns all of them, and
+    :meth:`.encode()` describes how they are encoded.
 
     By default signals are sorted by their start bit when their Message object is created.
     If you don't want them to be sorted pass `sort_signals = None`.
@@ -926,9 +928,9 @@ class Message:
         root) must have the same raw bits where they overlap, or an
         `EncodeError` exception is raised. Such signals exist only if the
         database was loaded with ``strict=False``. An overlapping signal
-        may be left out if the given signals set all its bits. To encode
-        decoded data after a change of one signal, remove the signals
-        that overlap it first.
+        may be left out if the given signals set all its bits. If you
+        change one signal of decoded data, change or remove the signals
+        that overlap it before encoding.
 
         >>> foo = db.get_message_by_name('Foo')
         >>> foo.encode({'Bar': 1, 'Fum': 5.0})
