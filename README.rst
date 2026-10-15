@@ -80,6 +80,43 @@ The last part of the example receives and `decodes`_ a CAN message.
 
 See `examples`_ for additional examples.
 
+Overlapping signals
+^^^^^^^^^^^^^^^^^^^
+
+Some databases describe the same bits twice, for example a status byte
+as one value and some of its bits as flags. Such databases load only
+with ``strict=False``. Decoding returns all signals.
+
+.. code-block:: python
+
+   >>> db = cantools.database.load_string('''
+   ... BO_ 1 Status: 1 Vector__XXX
+   ...  SG_ Status : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+   ...  SG_ Ready : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+   ...  SG_ Error : 1|1@1+ (1,0) [0|0] "" Vector__XXX
+   ... ''', strict=False)
+   >>> db.decode_message('Status', b'\x05')
+   {'Status': 5, 'Ready': 1, 'Error': 0}
+
+When encoding, overlapping signals must have the same bits where they
+overlap. A signal can be left out if the given signals set all its
+bits. Here the flags are optional, but the status byte is required,
+because the flags do not set bits 2 to 7.
+
+.. code-block:: python
+
+   >>> db.encode_message('Status', {'Status': 5})
+   b'\x05'
+   >>> db.encode_message('Status', {'Status': 5, 'Ready': 1})
+   b'\x05'
+   >>> db.encode_message('Status', {'Status': 5, 'Error': 1})
+   Traceback (most recent call last):
+     ...
+   cantools.database.errors.EncodeError: The values of the overlapping signals "Status" and "Error" do not match.
+
+If you change one signal of decoded data, change or remove the signals
+that overlap it before encoding. See `encoding`_ for the details.
+
 Command line tool
 -----------------
 
