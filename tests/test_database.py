@@ -4082,6 +4082,150 @@ BO_ 287 Message01: 1 Vector__XXX
         encoded = message.encode(decoded, strict=False)
         self.assertEqual(encoded, b'\x00\x55')
 
+    def test_overlapping_signals_encode_whole_and_bits(self):
+        # A status byte given as one value and as eight bit flags. The
+        # given values must match on shared bits, and a signal may be
+        # left out if the given signals set all its bits.
+        signals = [Signal('Whole', 0, 8)]
+        signals += [Signal(f'Bit{i}', i, 1) for i in range(8)]
+        message = Message(1, 'M', 2, signals, strict=False,
+                          unused_bit_pattern=0xff)
+        bits = {f'Bit{i}': (0xa5 >> i) & 1 for i in range(8)}
+
+        for strict in [True, False]:
+            for data in [{'Whole': 0xa5, **bits},
+                         {'Whole': 0xa5},
+                         bits,
+                         {'Whole': 0xa5, 'Bit0': 1, 'Bit1': 0}]:
+                self.assertEqual(message.encode(data, strict=strict),
+                                 b'\xa5\x00')
+
+            with self.assertRaises(EncodeError) as cm:
+                message.encode({'Whole': 0, **dict.fromkeys(bits, 1)},
+                               strict=strict)
+
+            self.assertEqual(
+                str(cm.exception),
+                'The values of the overlapping signals "Whole" and "Bit0" '
+                'do not match.')
+
+        self.assertEqual(message.encode({'Whole': 0xa5}, padding=True),
+                         b'\xa5\xff')
+
+        # No given signal sets bits 4 to 7.
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Bit0': 1, 'Bit1': 0, 'Bit2': 1, 'Bit3': 0})
+
+        self.assertEqual(str(cm.exception),
+                         'The signal "Whole" is required for encoding.')
+
+    def test_overlapping_signals_encode_big_endian_scaled(self):
+        # Overlapping signals are compared by raw bits, so scaled and
+        # signed views of the same bits match after rounding.
+        dbc = '''VERSION ""
+
+BS_:
+
+BU_:
+
+BO_ 1 M: 2 Vector__XXX
+ SG_ Raw : 7|16@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Scaled : 7|16@0+ (0.1,0) [0|0] "" Vector__XXX
+ SG_ Signed : 7|16@0- (1,0) [0|0] "" Vector__XXX
+ SG_ Msb : 7|1@0+ (1,0) [0|0] "" Vector__XXX
+'''
+        db = cantools.database.load_string(dbc, strict=False)
+        message = db.get_message_by_name('M')
+        frame = b'\x82\x35'
+
+        self.assertEqual(message.encode(message.decode(frame)), frame)
+        self.assertEqual(message.encode({'Raw': 0x8235}), frame)
+        self.assertEqual(message.encode({'Scaled': 3333.3}), frame)
+        self.assertEqual(
+            message.encode({'Scaled': 3333.3, 'Signed': -32203, 'Msb': 1}),
+            frame)
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Raw': 0x8235, 'Scaled': 3333.4})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Raw" and "Scaled" '
+            'do not match.')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Raw': 0x8235, 'Msb': 0})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Msb" and "Raw" '
+            'do not match.')
+
+    def test_overlapping_signals_encode_mixed_byte_order(self):
+        # A big endian word and a little endian flag on the same bit
+        # share one layer, so only the bit count shows the overlap.
+        message = Message(1, 'M', 2,
+                          [Signal('Word', 7, 16, 'big_endian'),
+                           Signal('Flag', 0, 1)],
+                          strict=False)
+
+        self.assertEqual(message.encode({'Word': 0x0100}), b'\x01\x00')
+        self.assertEqual(message.encode({'Word': 0x0100, 'Flag': 1}),
+                         b'\x01\x00')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Word': 0, 'Flag': 1})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Word" and "Flag" '
+            'do not match.')
+
+    def test_overlapping_multiplexed_signals_encode(self):
+        # Overlaps are handled per multiplexer branch. The multiplexer
+        # is required even if another signal sets all its bits.
+        signals = [
+            Signal('Mux', 0, 8, is_multiplexer=True),
+            Signal('MuxView', 0, 8),
+            Signal('Whole', 8, 8,
+                   multiplexer_ids=[1],
+                   multiplexer_signal='Mux'),
+        ]
+        signals += [
+            Signal(f'Bit{i}', 8 + i, 1,
+                   multiplexer_ids=[1],
+                   multiplexer_signal='Mux')
+            for i in range(8)
+        ]
+        message = Message(1, 'M', 2, signals, strict=False)
+        bits = {f'Bit{i}': (0xa5 >> i) & 1 for i in range(8)}
+
+        self.assertEqual(message.encode({'Mux': 1, 'Whole': 0xa5}),
+                         b'\x01\xa5')
+        self.assertEqual(message.encode({'Mux': 1, **bits}), b'\x01\xa5')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Mux': 1, 'Whole': 0xa5, 'Bit0': 0})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Bit0" and "Whole" '
+            'do not match.')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'MuxView': 1, 'Whole': 0xa5})
+
+        self.assertEqual(str(cm.exception),
+                         'The signal "Mux" is required for encoding.')
+
+        with self.assertRaises(EncodeError) as cm:
+            message.encode({'Mux': 1, 'MuxView': 2, 'Whole': 0xa5})
+
+        self.assertEqual(
+            str(cm.exception),
+            'The values of the overlapping signals "Mux" and "MuxView" '
+            'do not match.')
+
     def test_database_signals_check_failure(self):
         signal = cantools.database.can.Signal('S',
                                               7,

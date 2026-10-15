@@ -29,6 +29,7 @@ from ..errors import DecodeError, EncodeError, Error
 from ..namedsignalvalue import NamedSignalValue
 from ..utils import (
     SORT_SIGNALS_DEFAULT,
+    covered_signals,
     create_encode_decode_formats,
     decode_data,
     encode_data,
@@ -53,7 +54,9 @@ class Message:
     information.
 
     If `strict` is ``True`` an exception is raised if any signals are
-    overlapping or if they don't fit in the message.
+    overlapping or if they don't fit in the message. With ``False``,
+    overlapping signals are allowed. Decoding returns all of them, and
+    :meth:`.encode()` describes how they are encoded.
 
     By default signals are sorted by their start bit when their Message object is created.
     If you don't want them to be sorted pass `sort_signals = None`.
@@ -530,7 +533,9 @@ class Message:
         return a dictionary containing exactly the ones required.
 
         If a required signal is missing from the input dictionary, a
-        ``EncodeError`` exception is raised.
+        ``EncodeError`` exception is raised. An overlapping signal is not
+        required if given signals of the same multiplexer branch (or of
+        the root) set all its bits.
         '''
 
         if node is None:
@@ -538,10 +543,18 @@ class Message:
         assert node is not None
 
         result: dict[str, SignalValueType] = {}
+        covered: set[str] | None = None
 
         for signal in node['signals']:
             val = input_data.get(signal.name)
             if val is None:
+                if covered is None:
+                    covered = covered_signals(input_data, node['formats'])
+
+                # Multiplexers are needed to select the branch.
+                if not signal.is_multiplexer and signal.name in covered:
+                    continue
+
                 raise EncodeError(f'The signal "{signal.name}" is '
                                   f'required for encoding.')
             result[signal.name] = val
@@ -910,6 +923,14 @@ class Message:
         If `strict` is ``True`` the specified signals must exactly be the
         ones expected, and their values must be within their allowed ranges,
         or an `EncodeError` exception is raised.
+
+        Overlapping signals in the same multiplexer branch (or in the
+        root) must have the same raw bits where they overlap, or an
+        `EncodeError` exception is raised. Such signals exist only if the
+        database was loaded with ``strict=False``. An overlapping signal
+        may be left out if the given signals set all its bits. If you
+        change one signal of decoded data, change or remove the signals
+        that overlap it before encoding.
 
         >>> foo = db.get_message_by_name('Foo')
         >>> foo.encode({'Bar': 1, 'Fum': 5.0})
