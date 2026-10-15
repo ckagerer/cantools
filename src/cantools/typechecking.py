@@ -24,6 +24,12 @@ class Formats(NamedTuple):
     # Additional (big, little) codecs for overlapping signals. Each
     # layer is internally non-overlapping so bitstruct can unpack it.
     extra_layers: tuple[tuple[CompiledFormatDict, CompiledFormatDict], ...] = ()
+    # Only set if signals overlap: signal name to (codec index, bit
+    # mask), and the bits of each codec. Codecs 2*i and 2*i+1 are the
+    # big and little endian codecs of layer i, where layer 0 is
+    # (big_endian, little_endian).
+    signal_masks: dict[str, tuple[int, int]] | None = None
+    codec_masks: tuple[int, ...] = ()
 
 
 StringPathLike = str | os.PathLike[str]

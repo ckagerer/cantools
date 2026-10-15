@@ -29,6 +29,7 @@ from ..errors import DecodeError, EncodeError, Error
 from ..namedsignalvalue import NamedSignalValue
 from ..utils import (
     SORT_SIGNALS_DEFAULT,
+    covered_signals,
     create_encode_decode_formats,
     decode_data,
     encode_data,
@@ -542,6 +543,12 @@ class Message:
         for signal in node['signals']:
             val = input_data.get(signal.name)
             if val is None:
+                # Multiplexers are needed to select the branch.
+                if (not signal.is_multiplexer
+                        and signal.name in covered_signals(input_data,
+                                                           node['formats'])):
+                    continue
+
                 raise EncodeError(f'The signal "{signal.name}" is '
                                   f'required for encoding.')
             result[signal.name] = val
@@ -910,6 +917,11 @@ class Message:
         If `strict` is ``True`` the specified signals must exactly be the
         ones expected, and their values must be within their allowed ranges,
         or an `EncodeError` exception is raised.
+
+        Overlapping signals (only possible if the database was loaded
+        with ``strict=False``) must have the same raw bits where they
+        overlap, or an `EncodeError` exception is raised. An overlapping
+        signal may be left out if the given signals set all its bits.
 
         >>> foo = db.get_message_by_name('Foo')
         >>> foo.encode({'Bar': 1, 'Fum': 5.0})
